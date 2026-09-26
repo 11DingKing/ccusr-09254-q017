@@ -20,6 +20,9 @@ from .clock import (
 class EventType(StrEnum):
     CHECKIN = "checkin"
     MENTOR_CONFIRM = "mentor_confirm"
+    MENTOR_CONFIRM_REVOKE = "mentor_confirm_revoke"
+    MENTOR_DELEGATE = "mentor_delegate"
+    MENTOR_DELEGATE_REVOKE = "mentor_delegate_revoke"
     LEAVE_CORRECTION = "leave_correction"
 
 
@@ -150,6 +153,15 @@ def replay(
             target = checkin_index.get(target_id)
             if target is not None and target.student_id == event.student_id:
                 target.status = CheckinStatus.CONFIRMED
+        elif event.event_type == EventType.MENTOR_CONFIRM_REVOKE:
+            target_id = event.payload.get("checkin_event_id")
+            target = checkin_index.get(target_id)
+            if (
+                target is not None
+                and target.student_id == event.student_id
+                and target.activity_type == INTERNSHIP_TYPE
+            ):
+                target.status = CheckinStatus.PENDING
         elif event.event_type == EventType.LEAVE_CORRECTION:
             seconds = int(event.payload.get("adjustment_seconds", 0))
             adjustments_by_student.setdefault(event.student_id, []).append(

@@ -51,7 +51,14 @@ class LeaveCorrectionPayload(BaseModel):
 
 class EventIn(BaseModel):
     event_id: str = Field(..., min_length=1, max_length=128)
-    event_type: Literal["checkin", "mentor_confirm", "leave_correction"]
+    event_type: Literal[
+        "checkin",
+        "mentor_confirm",
+        "mentor_confirm_revoke",
+        "mentor_delegate",
+        "mentor_delegate_revoke",
+        "leave_correction",
+    ]
     student_id: str = Field(..., min_length=1, max_length=128)
     payload: dict[str, Any]
 
@@ -138,3 +145,79 @@ class DiffOut(BaseModel):
     new_event_cutoff_id: str | None
     student_changes: list[dict[str, Any]]
     students_affected: int
+
+
+class SettlementRuleIn(BaseModel):
+    seconds_per_unit: int = Field(2700, gt=0)
+    delegator_share_bps: int = Field(2000, ge=0, le=10000)
+
+
+class SettlementRuleOut(BaseModel):
+    plan_version: str
+    seconds_per_unit: int
+    delegator_share_bps: int
+    is_default: bool
+    updated_at: str | None
+
+
+class WorkloadPreviewOut(BaseModel):
+    plan_version: str
+    generated_at: str
+    event_cutoff_id: str | None
+    rule: dict[str, Any]
+    entries: list[dict[str, Any]]
+    mentors: list[dict[str, Any]]
+    skipped: list[dict[str, Any]]
+
+
+class BatchIssueIn(BaseModel):
+    note: str = Field("", max_length=512)
+
+
+class WorkloadBatchOut(BaseModel):
+    plan_version: str
+    batch_id: str
+    note: str
+    issued_at: str
+    generated_at: str
+    event_cutoff_id: str | None
+    rule: dict[str, Any]
+    entries: list[dict[str, Any]]
+    mentors: list[dict[str, Any]]
+    adjustments: list[dict[str, Any]]
+    skipped: list[dict[str, Any]]
+
+
+class AdjustmentIn(BaseModel):
+    adjustment_id: str = Field(..., min_length=1, max_length=128)
+    mentor_id: str = Field(..., min_length=1, max_length=128)
+    seconds: int
+    reason: str = Field("", max_length=512)
+    actor: str = Field("", max_length=128)
+
+
+class AdjustmentResult(BaseModel):
+    adjustment_id: str
+    mentor_id: str
+    seconds: int
+    reason: str
+    actor: str
+    created_at: str
+    created: bool
+
+
+class ReconcileOut(BaseModel):
+    plan_version: str
+    batch_id: str
+    consistent: bool
+    differences: list[dict[str, Any]]
+
+
+class MentorWorkloadOut(BaseModel):
+    plan_version: str
+    mentor_id: str
+    source: str
+    batch_id: str | None
+    summary: dict[str, Any]
+    entries: list[dict[str, Any]]
+    adjustments: list[dict[str, Any]]

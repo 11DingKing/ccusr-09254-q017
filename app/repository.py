@@ -12,7 +12,13 @@ from sqlalchemy.orm import Session
 from .core.replay import Event as CoreEvent
 from .core.replay import EventType
 from .models import Event as EventModel
-from .models import Freeze, Plan
+from .models import (
+    Freeze,
+    Plan,
+    SettlementRule,
+    WorkloadAdjustment,
+    WorkloadBatch,
+)
 
 
 def get_plan(db: Session, plan_version: str) -> Plan | None:
@@ -143,3 +149,110 @@ def insert_freeze(
     if inserted is not None:
         return db.get(Freeze, (plan_version, freeze_id))
     return None
+
+
+def get_rule(db: Session, plan_version: str) -> SettlementRule | None:
+    return db.get(SettlementRule, plan_version)
+
+
+def upsert_rule(
+    db: Session,
+    *,
+    plan_version: str,
+    seconds_per_unit: int,
+    delegator_share_bps: int,
+) -> SettlementRule:
+    """执行确定性的业务处理。"""
+    stmt = sqlite_insert(SettlementRule).values(
+        plan_version=plan_version,
+        seconds_per_unit=seconds_per_unit,
+        delegator_share_bps=delegator_share_bps,
+        updated_at=datetime.now(timezone.utc),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["plan_version"],
+        set_={
+            "seconds_per_unit": seconds_per_unit,
+            "delegator_share_bps": delegator_share_bps,
+            "updated_at": datetime.now(timezone.utc),
+        },
+    )
+    db.execute(stmt)
+    db.commit()
+    rule = db.get(SettlementRule, plan_version)
+    assert rule is not None
+    return rule
+
+
+def get_batch(db: Session, plan_version: str, batch_id: str) -> WorkloadBatch | None:
+    return db.get(WorkloadBatch, (plan_version, batch_id))
+
+
+def insert_batch(
+    db: Session,
+    *,
+    plan_version: str,
+    batch_id: str,
+    snapshot: dict[str, Any],
+    event_cutoff_id: str | None,
+    note: str,
+) -> WorkloadBatch | None:
+    """执行确定性的业务处理。"""
+    stmt = sqlite_insert(WorkloadBatch).values(
+        plan_version=plan_version,
+        batch_id=batch_id,
+        snapshot=snapshot,
+        event_cutoff_id=event_cutoff_id,
+        note=note,
+    )
+    stmt = stmt.on_conflict_do_nothing(
+        index_elements=["plan_version", "batch_id"]
+    ).returning(WorkloadBatch.plan_version)
+    inserted = db.execute(stmt).scalar_one_or_none()
+    db.commit()
+    if inserted is not None:
+        return db.get(WorkloadBatch, (plan_version, batch_id))
+    return None
+
+
+def list_adjustments(
+    db: Session, plan_version: str, batch_id: str
+) -> list[WorkloadAdjustment]:
+    stmt = (
+        select(WorkloadAdjustment)
+        .where(WorkloadAdjustment.plan_version == plan_version)
+        .where(WorkloadAdjustment.batch_id == batch_id)
+        .order_by(WorkloadAdjustment.created_at, WorkloadAdjustment.adjustment_id)
+    )
+    return list(db.execute(stmt).scalars().all())
+
+
+def insert_adjustment(
+    db: Session,
+    *,
+    plan_version: str,
+    batch_id: str,
+    adjustment_id: str,
+    mentor_id: str,
+    seconds: int,
+    reason: str,
+    actor: str,
+) -> tuple[WorkloadAdjustment, bool]:
+    """执行确定性的业务处理。"""
+    stmt = sqlite_insert(WorkloadAdjustment).values(
+        plan_version=plan_version,
+        batch_id=batch_id,
+        adjustment_id=adjustment_id,
+        mentor_id=mentor_id,
+        seconds=seconds,
+        reason=reason,
+        actor=actor,
+    )
+    stmt = stmt.on_conflict_do_nothing(
+        index_elements=["plan_version", "batch_id", "adjustment_id"]
+    ).returning(WorkloadAdjustment.adjustment_id)
+    inserted = db.execute(stmt).scalar_one_or_none()
+    db.commit()
+    row = db.get(WorkloadAdjustment, (plan_version, batch_id, adjustment_id))
+    assert row is not None
+    return row, inserted is not None
