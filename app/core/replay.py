@@ -21,6 +21,9 @@ class EventType(StrEnum):
     CHECKIN = "checkin"
     MENTOR_CONFIRM = "mentor_confirm"
     LEAVE_CORRECTION = "leave_correction"
+    # 导师工作量账本相关事件；既有快照重放会忽略它们。
+    MENTOR_DELEGATE = "mentor_delegate"
+    MENTOR_CONFIRM_REVOKE = "mentor_confirm_revoke"
 
 
 class CheckinStatus(StrEnum):

@@ -44,6 +44,17 @@ class MentorConfirmPayload(BaseModel):
     checkin_event_id: str
 
 
+class MentorDelegatePayload(BaseModel):
+    primary_mentor_id: str
+    delegate_mentor_id: str
+    revoked: bool = False
+
+
+class MentorConfirmRevokePayload(BaseModel):
+    checkin_event_id: str
+    mentor_id: str
+
+
 class LeaveCorrectionPayload(BaseModel):
     adjustment_seconds: int
     reason: str = ""
@@ -51,7 +62,13 @@ class LeaveCorrectionPayload(BaseModel):
 
 class EventIn(BaseModel):
     event_id: str = Field(..., min_length=1, max_length=128)
-    event_type: Literal["checkin", "mentor_confirm", "leave_correction"]
+    event_type: Literal[
+        "checkin",
+        "mentor_confirm",
+        "leave_correction",
+        "mentor_delegate",
+        "mentor_confirm_revoke",
+    ]
     student_id: str = Field(..., min_length=1, max_length=128)
     payload: dict[str, Any]
 
@@ -138,3 +155,48 @@ class DiffOut(BaseModel):
     new_event_cutoff_id: str | None
     student_changes: list[dict[str, Any]]
     students_affected: int
+
+
+# ---------------------------------------------------------------------------
+# 导师工作量结算
+# ---------------------------------------------------------------------------
+
+
+class SettlementRulesIn(BaseModel):
+    delegation_primary_share_bp: int = Field(6000, ge=0, le=10000)
+    delegation_secondary_share_bp: int = Field(4000, ge=0, le=10000)
+
+    @model_validator(mode="after")
+    def _shares_sum_to_whole(self) -> "SettlementRulesIn":
+        if (
+            self.delegation_primary_share_bp
+            + self.delegation_secondary_share_bp
+            != 10000
+        ):
+            raise ValueError("delegation shares must sum to 10000 basis points")
+        return self
+
+
+class SettlementRulesOut(BaseModel):
+    delegation_primary_share_bp: int
+    delegation_secondary_share_bp: int
+
+
+class SettlementBatchIn(BaseModel):
+    period: str = Field(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    event_cutoff_id: str | None = None
+
+
+class SettlementPreviewIn(BaseModel):
+    period: str = Field(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    event_cutoff_id: str | None = None
+
+
+class SettlementAdjustmentIn(BaseModel):
+    adjustment_id: str = Field(..., min_length=1, max_length=128)
+    mentor_id: str = Field(..., min_length=1, max_length=128)
+    checkin_event_id: str = Field(..., min_length=1, max_length=128)
+    delta_seconds: int
+    weight_bp: int = Field(10000, ge=0, le=10000)
+    reason: str = Field(..., min_length=1, max_length=512)
+    created_by: str = Field(..., min_length=1, max_length=128)

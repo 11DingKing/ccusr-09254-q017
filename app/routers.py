@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
-from . import services
+from . import services, settlement_service
 from .db import get_db
 from .schemas import (
     DiffOut,
@@ -16,6 +16,11 @@ from .schemas import (
     ImportResult,
     PlanIn,
     PlanOut,
+    SettlementAdjustmentIn,
+    SettlementBatchIn,
+    SettlementPreviewIn,
+    SettlementRulesIn,
+    SettlementRulesOut,
     SnapshotOut,
     StudentProgressOut,
 )
@@ -159,4 +164,158 @@ def get_diff(
             db, plan_version, freeze_id, other_freeze_id
         )
     except (services.PlanNotFoundError, services.FreezeNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# 导师工作量结算账本
+# ---------------------------------------------------------------------------
+
+
+_PLAN_NOT_FOUND = (settlement_service.PlanNotFoundError,)
+_SETTLE_NOT_FOUND = (
+    settlement_service.PlanNotFoundError,
+    settlement_service.BatchNotFoundError,
+)
+
+
+@router.put(
+    "/plans/{plan_version}/settlement/rules",
+    response_model=SettlementRulesOut,
+)
+def put_settlement_rules(
+    plan_version: str, body: SettlementRulesIn, db: Session = Depends(get_db)
+) -> Any:
+    try:
+        return settlement_service.configure_rules(
+            db,
+            plan_version=plan_version,
+            delegation_primary_share_bp=body.delegation_primary_share_bp,
+            delegation_secondary_share_bp=body.delegation_secondary_share_bp,
+        )
+    except _PLAN_NOT_FOUND as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except settlement_service.RuleValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/plans/{plan_version}/settlement/rules",
+    response_model=SettlementRulesOut,
+)
+def get_settlement_rules(
+    plan_version: str, db: Session = Depends(get_db)
+) -> Any:
+    try:
+        return settlement_service.get_rules(db, plan_version)
+    except _PLAN_NOT_FOUND as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/plans/{plan_version}/settlements/preview")
+def preview_settlement(
+    plan_version: str, body: SettlementPreviewIn, db: Session = Depends(get_db)
+) -> Any:
+    try:
+        return settlement_service.preview_settlement(
+            db,
+            plan_version,
+            body.period,
+            event_cutoff_id=body.event_cutoff_id,
+        )
+    except _PLAN_NOT_FOUND as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except settlement_service.RuleValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/plans/{plan_version}/settlements/{batch_id}",
+)
+def issue_settlement(
+    plan_version: str,
+    batch_id: str,
+    body: SettlementBatchIn,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        result, created = settlement_service.issue_batch(
+            db,
+            plan_version=plan_version,
+            batch_id=batch_id,
+            period=body.period,
+            event_cutoff_id=body.event_cutoff_id,
+        )
+    except _SETTLE_NOT_FOUND as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except settlement_service.RuleValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except settlement_service.SettlementConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if response is not None:
+        response.status_code = (
+            status.HTTP_201_CREATED if created else status.HTTP_200_OK
+        )
+    return result
+
+
+@router.get("/plans/{plan_version}/settlements")
+def list_settlements(plan_version: str, db: Session = Depends(get_db)) -> Any:
+    try:
+        return {"batches": settlement_service.list_batches(db, plan_version)}
+    except _PLAN_NOT_FOUND as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_version}/settlements/{batch_id}")
+def get_settlement(
+    plan_version: str, batch_id: str, db: Session = Depends(get_db)
+) -> Any:
+    try:
+        return settlement_service.read_batch(db, plan_version, batch_id)
+    except _SETTLE_NOT_FOUND as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/plans/{plan_version}/settlements/{batch_id}/adjustments",
+    status_code=status.HTTP_201_CREATED,
+)
+def post_settlement_adjustment(
+    plan_version: str,
+    batch_id: str,
+    body: SettlementAdjustmentIn,
+    db: Session = Depends(get_db),
+) -> Any:
+    try:
+        return settlement_service.add_adjustment(
+            db,
+            plan_version=plan_version,
+            batch_id=batch_id,
+            adjustment_id=body.adjustment_id,
+            mentor_id=body.mentor_id,
+            checkin_event_id=body.checkin_event_id,
+            delta_seconds=body.delta_seconds,
+            reason=body.reason,
+            created_by=body.created_by,
+            weight_bp=body.weight_bp,
+        )
+    except _SETTLE_NOT_FOUND as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except settlement_service.AdjustmentTargetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except settlement_service.RuleValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except settlement_service.AdjustmentConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/plans/{plan_version}/mentors/{mentor_id}/settlement")
+def get_mentor_settlement(
+    plan_version: str, mentor_id: str, db: Session = Depends(get_db)
+) -> Any:
+    try:
+        return settlement_service.mentor_detail(db, plan_version, mentor_id)
+    except _PLAN_NOT_FOUND as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
